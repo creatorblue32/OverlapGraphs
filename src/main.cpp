@@ -53,59 +53,6 @@ class testSensor : public Sensor {
     float distance;
 };
 
-class SimulationEnvironment1 {
-public:
-    std::vector<testSensor*> vehicle;
-    std::vector<std::vector<float>> sequence;
-    bool simulationComplete;
-
-    SimulationEnvironment1(std::vector<Sensor*> vehicleInput, std::vector<std::vector<float>> sequenceInput, float valueInput){
-        vehicle = {};
-        for (Sensor* sensor : vehicleInput){
-            testSensor * current = dynamic_cast<testSensor*>(sensor);
-            if(current){
-                vehicle.push_back(current);
-            }
-        }
-        // make a vehicle of sensors that need to be operated. 
-        sequence = sequenceInput;
-        simulationComplete = false;
-        realValue = valueInput;
-    }
-
-
-    void operateSensors(){
-        while(!simulationComplete){
-            for(int i = 0; i < vehicle.size(); i++){
-                vehicle[i]->operateSensor(realValue);
-            }
-        }
-    }
-
-    void runSequence(){
-        for(int phase = 0; phase < sequence.size(); phase++){
-            for(int sensor = 0; sensor < sequence[phase].size(); sensor++){
-                vehicle[sensor]->noise = sequence[phase][sensor];
-            }
-            sleep(5);
-            std::cout << "Phase " << phase << " complete. " << std::endl;
-        }
-        simulationComplete = true;
-    }
-
-    void runSimulation(){
-        std::thread run(&SimulationEnvironment1::runSequence, this);
-        std::thread sensorNoise(&SimulationEnvironment1::operateSensors, this);
-        run.join();
-        sensorNoise.join();
-        std::cout << "Simulation complete. " << std::endl;
-        exit(0);
-    }
-
-private:
-    int realValue;
-};
-
 
 class sensorInfo{
     public:
@@ -123,7 +70,8 @@ class sensorInfo{
         std::vector<uint8_t> compatibleSensors;
 };
 
-using overlapFunction = float(*) (Sensor*, Sensor*);
+
+
 
 class overlapGraphEstimator{
     public:
@@ -139,8 +87,36 @@ class overlapGraphEstimator{
                 return overlapGraph[{adjacentSensor,currentSensor}];
             }            
         }
-        void makeEstimation(){
+        float makeEstimation(){
+            // now we have an adjacency list of confidences. how to get an estimation out of it?
 
+            //Take average of confidences (efficiency: recalculate averages after each update.)
+            float confidenceAverage = 0;
+            for (sensorInfo* currentSensor: sensorIndex){
+                confidenceAverage += currentSensor->confidence;
+            }
+            confidenceAverage = confidenceAverage / sensorIndex.size();
+            
+
+            float currentEstimation = 0;
+            uint8_t currentActive = 0;
+
+            //std::cout << "Confidence Average " << confidenceAverage <<std::endl;
+
+
+            for (sensorInfo* currentSensor: sensorIndex){
+                //std::cout << "Current Confidence " << currentSensor->confidence <<std::endl;
+
+                if(currentSensor->confidence <= confidenceAverage){
+                    currentEstimation += currentSensor->sensor->getState()[0];
+                    currentActive++;
+                }
+            }
+            //std::cout << "Num active: " << float(currentActive) << std::endl;
+            float estimationVal = currentEstimation / (float) currentActive;
+            //std::string estimation = "Overlap Graph Estimation " + std::to_string(estimationVal);
+            //std::cout << estimation << std::endl;
+            return estimationVal;
         }
 
         void updateConfidence(uint8_t currSensorIndex, uint8_t prevAgreement, uint8_t currAgreement){
@@ -176,36 +152,148 @@ class overlapGraphEstimator{
         }
         std::vector<sensorInfo*> sensorIndex;
         std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph;
-
     private:
 
 };
 
 
-std::vector<float> traditionalStateEstimator(std::vector<Sensor*> vehicle, int states){
-    while(1==1){
-        std::vector<float> total = {};
-        for(int i = 0; i < states; i++){
-            total.push_back(0.0);
-        }
+std::vector<float> traditionalStateEstimator(std::vector<Sensor*> vehicle, uint8_t states){
+    std::vector<float> total = {};
+    for(int i = 0; i < states; i++){
+        total.push_back(0.0);
+    }
 
-        std::vector<float> current_state = {};
-        int numSensors = vehicle.size();
-        for(int sensor = 0; sensor < numSensors; sensor++){
-            current_state = vehicle[sensor]->getState();
-            for(int state = 0; state<states;state++){
-                total[state] += current_state[state];
+    std::vector<float> current_state = {};
+    int numSensors = vehicle.size();
+    for(int sensor = 0; sensor < numSensors; sensor++){
+        current_state = vehicle[sensor]->getState();
+        for(int state = 0; state<states;state++){
+            total[state] += current_state[state];
+        }
+    }
+    
+    for(int state = 0; state < states; state++){
+        total[state] = total[state] / (float) numSensors;
+    }
+    return total;
+}
+
+
+class SimulationEnvironment1 {
+public:
+    std::vector<testSensor*> vehicle;
+    std::vector<Sensor*> sensorVehicle;
+    overlapGraphEstimator* graphEstimator;
+
+    std::vector<std::vector<float>> sequence;
+    bool simulationComplete;
+
+    SimulationEnvironment1(std::vector<Sensor*> vehicleInput, std::vector<std::vector<float>> sequenceInput, float valueInput, overlapGraphEstimator* graphEstimator_) {
+        vehicle = {};
+        for (Sensor* sensor : vehicleInput){
+            testSensor * current = dynamic_cast<testSensor*>(sensor);
+            if(current){
+                vehicle.push_back(current);
             }
         }
-        
-        for(int state = 0; state < states; state++){
-            total[state] = total[state] / (float) numSensors;
-            std::cout << "Traditional State Estimation: " << total[state] << std::endl;
-
-        }
-        sleep(1);
+        sensorVehicle = vehicleInput;
+        // make a vehicle of sensors that need to be operated. 
+        sequence = sequenceInput;
+        simulationComplete = false;
+        realValue = valueInput;
+        graphEstimator = graphEstimator_;
     }
-}
+
+
+    void operateSensors(){
+        while(!simulationComplete){
+            for(int i = 0; i < vehicle.size(); i++){
+                vehicle[i]->operateSensor(realValue);
+            }
+        }
+    }
+
+    void runSequence(){
+        std::vector<float> overlapGraphEstimations = {};
+        std::vector<float> traditionalEstimations = {};
+        std::vector<long> overlapDurations = {};
+        std::vector<long> traditionalDurations = {};
+
+
+        sleep(1);
+        std::cout << "Beginning Simulation." << std::endl;
+
+        for(int phase = 0; phase < sequence.size(); phase++){
+            for(int sensor = 0; sensor < sequence[phase].size(); sensor++){
+                vehicle[sensor]->noise = sequence[phase][sensor];
+            }
+            for(int i = 0; i < 5; i++){
+                //Request States every 1 second
+                auto start = std::chrono::high_resolution_clock::now();
+                traditionalEstimations.push_back(traditionalStateEstimator(sensorVehicle, 1)[0]);
+                auto stop = std::chrono::high_resolution_clock::now();
+                traditionalDurations.push_back((std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start)).count());
+
+                auto start2 = std::chrono::high_resolution_clock::now();
+                overlapGraphEstimations.push_back(graphEstimator->makeEstimation());
+                auto stop2 = std::chrono::high_resolution_clock::now();
+                overlapDurations.push_back((std::chrono::duration_cast<std::chrono::nanoseconds>(stop2 - start2)).count());
+
+
+                sleep(1);
+            }
+            std::cout << "Phase " << phase << " complete. " << std::endl;
+        }
+        
+        std::vector<float> tradDifferences = {};
+
+        //std::cout << "Traditional Estimations: ";
+        for (float element : traditionalEstimations) {
+            tradDifferences.push_back(abs(element-5));
+            //std::cout << element << " ";
+        }
+        //std::cout << std::endl;
+
+        std::vector<float> overlapDifferences = {};
+
+        //std::cout << "Overlap Graph Estimations: ";
+        for (float element : overlapGraphEstimations) {
+            overlapDifferences.push_back(abs(element-5));
+            //std::cout << element << " ";
+        }
+        //std::cout << std::endl;   
+
+
+        float overlapError =  std::accumulate(overlapDifferences.begin(), overlapDifferences.end(), 0.0f) / overlapDifferences.size();
+        float tradError =  std::accumulate(tradDifferences.begin(), tradDifferences.end(), 0.0f) / tradDifferences.size();
+
+        std::cout << "Average Traditional Error: " << tradError << std::endl;
+        std::cout << "Average Overlap Error: " << overlapError << std::endl;
+
+        float tradTime =  std::accumulate(traditionalDurations.begin(), traditionalDurations.end(), 0.0f) / traditionalDurations.size();
+        float overlapTime =  std::accumulate(overlapDurations.begin(), overlapDurations.end(), 0.0f) / overlapDurations.size();
+        
+        std::cout << "Average Traditional Time: " << tradTime << std::endl;
+        std::cout << "Average Overlap Time: " << overlapTime << std::endl;
+
+
+
+        simulationComplete = true;
+    }
+
+    void runSimulation(){
+        std::thread run(&SimulationEnvironment1::runSequence, this);
+        std::thread sensorNoise(&SimulationEnvironment1::operateSensors, this);
+        run.join();
+        sensorNoise.join();
+        std::cout << "Simulation complete. " << std::endl;
+        exit(0);
+    }
+
+private:
+    int realValue;
+};
+
 
 int main() {
     //Make my test sensors, vehicle
@@ -216,10 +304,8 @@ int main() {
 
 
     //Make my sequence
-    std::vector<std::vector<float>> sequence = {{.001,.001,.25},{.001,.25,.001},{.25, .001,.001}};
+    std::vector<std::vector<float>> sequence = {{0.0,0.0,1.0},{0.0,1.0,0.0},{1.0, 0.0,0.0}};
 
-    // Make simulation environment
-    SimulationEnvironment1 sim = SimulationEnvironment1(vehicle, sequence, 5.0);
 
     //Make graph estimator
     sensorInfo* firstSensorInfo = new sensorInfo(firstSensor, 0, {1,2});
@@ -228,14 +314,21 @@ int main() {
     std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph = {{{0,1},0},{{1,2},0},{{0,2},0}};
     overlapGraphEstimator est = overlapGraphEstimator(sensorMap, overlapGraph);
 
+    // Make simulation environment
+    SimulationEnvironment1 sim = SimulationEnvironment1(vehicle, sequence, 5.0, &est);
+
+
     //Run Simulation, Traditional State Estimation, Overlap Graph Estimation
     std::thread run(&SimulationEnvironment1::runSimulation, sim); 
     sleep(1);
     std::thread traditional(traditionalStateEstimator, vehicle, 1);
-    std::thread overlap(&overlapGraphEstimator::updateGraph, est);
+    std::thread overlaprun(&overlapGraphEstimator::updateGraph, est);
+    std::thread overlap(&overlapGraphEstimator::makeEstimation, est);
+
 
     run.join();
     traditional.join();
+    overlaprun.join();
     overlap.join();
 
     return 0;
