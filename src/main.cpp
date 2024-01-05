@@ -58,10 +58,10 @@ class simulatedDepthMapSensor : public Sensor {
     std::vector<float> minState = {0.0, 0.0};
     std::vector<float> maxState = {15.0, 15.0};
     float noiselessValue[5][5];
+    float value[5][5];
     float noise;
     std::pair<int,int> offset;
     std::mutex sensorMutex;
-    float value[5][5];
 
     simulatedDepthMapSensor(std::pair<int,int> offset_){
         offset = offset_;
@@ -211,13 +211,16 @@ class overlapGraphEstimator{
             while(true){
                 for(overlapGraphSensorInfo* currentSensor : sensorIndex){
                     std::lock_guard<std::mutex> guard(graphMutex);
-                    uint16_t totalAgreements = 0;
-                    for(uint8_t adjacentSensor : currentSensor->compatibleSensors){
-                        uint8_t prevAgreement = getAgreement(currentSensor->index, adjacentSensor);
-                        uint8_t currAgreement = currentSensor->sensor->overlap(sensorIndex[adjacentSensor]->sensor);
-                        totalAgreements += currAgreement;
+                    uint16_t agreementSum = 0;
+                    for(uint8_t adjacentSensorIndex : currentSensor->compatibleSensors){
+                        overlapGraphSensorInfo * adjacentSensor = sensorIndex[adjacentSensorIndex]; 
+                        uint8_t prevAgreement = getAgreement(currentSensor->index, adjacentSensorIndex);
+                        uint8_t currAgreement = currentSensor->sensor->overlap(adjacentSensor->sensor);
+                        putAgreement(currentSensor->index, adjacentSensorIndex, currAgreement);
+                        adjacentSensor->confidence += ((currAgreement-prevAgreement) / adjacentSensor->numCompatible);
+                        agreementSum += currAgreement;
                     }
-                    currentSensor->confidence = (uint8_t) (totalAgreements / currentSensor->numCompatible);
+                    currentSensor->confidence = (uint8_t) (agreementSum / currentSensor->numCompatible);
                 }
             }
         }
@@ -229,6 +232,14 @@ class overlapGraphEstimator{
             else{
                 return overlapGraph[{adjacentSensor,currentSensor}];
             }            
+        }
+        void putAgreement(uint8_t currentSensor, uint8_t adjacentSensor, uint8_t agreement){
+            if(adjacentSensor > currentSensor){
+                overlapGraph[{adjacentSensor,currentSensor}] = agreement;
+            }
+            else{
+                overlapGraph[{adjacentSensor,currentSensor}] = agreement;
+            }              
         }
 };
 
@@ -574,5 +585,5 @@ int runTest2(){
     }
 
 int main() {
-    runTest1();
+    runTest2();
 }
