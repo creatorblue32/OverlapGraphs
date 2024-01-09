@@ -518,38 +518,25 @@ int runTest1(){
         simulatedDistanceSensor * firstSensor = new simulatedDistanceSensor();
         simulatedDistanceSensor * secondSensor = new simulatedDistanceSensor();
         simulatedDistanceSensor * thirdSensor = new simulatedDistanceSensor();
-        std::vector<Sensor*> vehicle = {firstSensor, secondSensor, thirdSensor};
+        std::vector<Sensor*> sensorList = {firstSensor, secondSensor, thirdSensor};
 
 
         //Make my sequence
-        std::vector<std::vector<float>> sequence = {{0.0,0.0,4.0},{0.0,4.0,0.0},{4.0, 0.0,0.0}};
+        std::vector<std::vector<float>> sequence = {{0.1,0.1,4.0},{0.1,4.0,0.1},{4.0, 0.1,0.1}};
 
-
-        //Make graph estimator
-        overlapGraphSensorInfo* firstSensorInfo = new overlapGraphSensorInfo(firstSensor, 0, {1,2});
-
-        std::vector<overlapGraphSensorInfo*> sensorMap = {firstSensorInfo, new overlapGraphSensorInfo(secondSensor,1,{0,2}), new overlapGraphSensorInfo(thirdSensor,2,{0,1})}; 
+        //Make the overlap graph estimator
+        std::vector<overlapGraphSensorInfo*> sensorMap = {new overlapGraphSensorInfo(firstSensor, 0, {1,2}), new overlapGraphSensorInfo(secondSensor,1,{0,2}), new overlapGraphSensorInfo(thirdSensor,2,{0,1})}; 
         std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph = {{{0,1},0},{{1,2},0},{{0,2},0}};
         overlapGraphEstimator est(sensorMap, overlapGraph, 1);
 
         // Make simulation environment
-        SimulationEnvironment1 sim = SimulationEnvironment1(vehicle, sequence, 5.0, &est);
+        SimulationEnvironment1 sim = SimulationEnvironment1(sensorList, sequence, 5.0, &est);
 
-
-        //Run Simulation, Traditional State Estimation, Overlap Graph Estimation
-        std::thread run(&SimulationEnvironment1::runSimulation, sim); 
-        std::thread traditional(traditionalStateEstimator, vehicle, 1);
-        std::thread overlaprun(&overlapGraphEstimator::updateGraph, &est);
-        sleep(1);
-        std::thread overlap(&overlapGraphEstimator::makeEstimation, &est);
-
-
-        run.join();
-        traditional.join();
-        overlaprun.join();
-        overlap.join();
-
-        return 0;  
+        //Run Simulation
+        std::thread runSimulation(&SimulationEnvironment1::runSimulation, sim); 
+        std::thread runOverlapGraph(&overlapGraphEstimator::updateGraph, &est);
+        runSimulation.join();
+        runOverlapGraph.join();
     }
 
 int runTest2(){
@@ -559,10 +546,11 @@ int runTest2(){
         
         std::vector<Sensor*> vehicle = {firstSensor, secondSensor, thirdSensor};
 
-        std::vector<std::vector<float>> sequence = {{0.0,0.0,5.0},{0.0,5.0,0.0},{5.0, 0.0,0.0}};
+        std::vector<std::vector<float>> sequence = {{0.1,0.1,5.0},{0.1,5.0,0.1},{5.0, 0.1,0.1}};
 
 
-        std::vector<overlapGraphSensorInfo*> sensorMap = {new overlapGraphSensorInfo(firstSensor,0,{1,2}), new overlapGraphSensorInfo(secondSensor,1,{0,2}), new overlapGraphSensorInfo(thirdSensor,2,{0,1})}; 
+        std::vector<overlapGraphSensorInfo*> sensorMap = {new overlapGraphSensorInfo(firstSensor,0,{1,2}),
+         new overlapGraphSensorInfo(secondSensor,1,{0,2}), new overlapGraphSensorInfo(thirdSensor,2,{0,1})}; 
         std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph = {{{0,1},0},{{1,2},0},{{0,2},0}};
         overlapGraphEstimator est(sensorMap, overlapGraph, 2);
 
@@ -570,16 +558,12 @@ int runTest2(){
 
 
         //Run Simulation, Traditional State Estimation, Overlap Graph Estimation
-        std::thread run(&SimulationEnvironment2::runSimulation, sim); 
-        //std::thread traditional(traditionalStateEstimator, vehicle, 1);
-        std::thread overlaprun(&overlapGraphEstimator::updateGraph, &est);
-        //std::thread overlap(&overlapGraphEstimator::makeEstimation, &est);
+        std::thread runSimulation(&SimulationEnvironment2::runSimulation, sim); 
+        std::thread runOverlapGraph(&overlapGraphEstimator::updateGraph, &est);
 
 
-        run.join();
-        //traditional.join();
-        overlaprun.join();
-        //overlap.join();
+        runSimulation.join();
+        runOverlapGraph.join();
 
         return 0;  
     }
