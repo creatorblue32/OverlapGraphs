@@ -119,7 +119,7 @@ public:
     std::vector<float> getState() override
     {
         sensorMutex.lock();
-        int minVal = std::numeric_limits<int>::max();
+        float minVal = std::numeric_limits<float>::max();
         int minX = 0, minY = 0;
         for (int i = 0; i < 5; ++i)
         {
@@ -455,7 +455,7 @@ public:
             {
                 depthMapSensorVehicle[sensor]->noise = sequence[phase][sensor];
             }
-            for (int j = 0; j < 5; j++)
+            for (int j = 0; j < 50; j++)
             {
                 std::cout << "---------------- New Round -------------" << std::endl;
                 for (int i = 0; i < depthMapSensorVehicle.size(); i++)
@@ -465,6 +465,12 @@ public:
                     std::cout << "Sensor " << std::to_string(i) << " Noise: " << depthMapSensorVehicle[i]->noise;
                     std::cout << " Sensor State: X:" << depthMapSensorVehicle[i]->getState()[0] << " Y:" << depthMapSensorVehicle[i]->getState()[1];
                     std::cout << std::endl;
+                    for(int row = 0; row < 5; row++){
+                        for (int col = 0; col < 5; col++){
+                            std::cout << depthMapSensorVehicle[i]->value[row][col] << " ";
+                        }
+                        std::cout << std::endl;
+                    }
                 }
 
                 std::vector<float> current_state = {};
