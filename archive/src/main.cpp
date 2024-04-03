@@ -8,9 +8,9 @@
 #include <stdexcept>
 #include <map>
 #include <mutex>
-#include <iostream>
 #include <fstream>
 #include <vector>
+#include <set>
 
 // HELPER FUNCTIONS
 float generateRandomFloat(float minValue, float maxValue)
@@ -243,6 +243,7 @@ public:
     std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph;
     uint8_t dimension;
     std::mutex graphMutex;
+    std::set<uint8_t> reliableSensors;
 
     overlapGraphEstimator(std::vector<overlapGraphSensorInfo *> sensorIndex_, std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph_, uint8_t dimension_)
     {
@@ -251,11 +252,28 @@ public:
         dimension = dimension_;
     }
 
-    std::vector<float> makeEstimation()
+    void printGraph()
+    {
+
+        std::cout << "Graph Snapshot -----" << std::endl;
+        for (const auto &entry : overlapGraph)
+        {
+            const auto &key = entry.first;    // The key is a std::pair<uint8_t, uint8_t>
+            const auto &value = entry.second; // The value is a uint8_t
+
+            // Print in the format "pair.first -> pair.second: value"
+            std::cout << static_cast<int>(key.first) << " -> " << static_cast<int>(key.second) << ": " << static_cast<int>(value) << std::endl;
+        }
+        std::cout << std::endl;
+    }
+
+    // Updates the set of sensors that we consider to be currently "reliable". 
+    // Currently, thresholding is implemented by filtering out any sensors with 
+    // below average confidence.
+    void discriminate()
     {
         std::lock_guard<std::mutex> guard(graphMutex);
 
-        // Determine the average confidence for all sensors in the graph
         float confidenceAverage = 0;
         for (overlapGraphSensorInfo *currentSensor : sensorIndex)
         {
@@ -263,26 +281,32 @@ public:
         }
         confidenceAverage = confidenceAverage / sensorIndex.size();
 
+        reliableSensors.clear();
+        for (overlapGraphSensorInfo *currentSensor : sensorIndex)
+        {
+            if (currentSensor->confidence >= confidenceAverage)
+            {
+                reliableSensors.insert(currentSensor->index);
+            }
+        }
+    }
+
+    //Using sensors
+    std::vector<float> makeEstimation()
+    {
+        std::lock_guard<std::mutex> guard(graphMutex);
         // Sum all of the states outputted by sensors that have above the average confidence
         std::vector<float> currentEstimation(dimension, 0.0);
         uint8_t currentActive = 0;
-        for (overlapGraphSensorInfo *currentSensor : sensorIndex)
+        for (uint8_t currentSensorIndex : reliableSensors)
         {
-
-            if (currentSensor->confidence >= confidenceAverage)
+            // std::cout << "Including " << std::to_string(currentSensor->index) << " with confidence " << std::to_string(currentSensor->confidence) << std::endl;
+            std::vector<float> sensorStates = sensorIndex[currentSensorIndex]->sensor->getState();
+            for (uint8_t i = 0; i < dimension; i++)
             {
-                std::cout << "Including " << std::to_string(currentSensor->index) << " with confidence " << std::to_string(currentSensor->confidence) << std::endl;
-                std::vector<float> sensorStates = currentSensor->sensor->getState();
-                for (uint8_t i = 0; i < dimension; i++)
-                {
-                    currentEstimation[i] += sensorStates[i];
-                }
-                currentActive++;
+                currentEstimation[i] += sensorStates[i];
             }
-            else
-            {
-                std::cout << " >> EXCLUDING " << std::to_string(currentSensor->index) << " with confidence " << std::to_string(currentSensor->confidence) << std::endl;
-            }
+            currentActive++;
         }
 
         // Divide each sum by the number of sensors included in that sum
@@ -290,32 +314,29 @@ public:
         {
             estimation /= (float)currentActive;
         }
-
-        std::cout << "Overlap Estimation: x-" << std::to_string(currentEstimation[0]) << " y-" << std::to_string(currentEstimation[1]) << std::endl;
-        std::cout << std::endl;
-
+        // std::cout << "Overlap Estimation: x-" << std::to_string(currentEstimation[0]) << " y-" << std::to_string(currentEstimation[1]) << std::endl;
+        // std::cout << std::endl;
         return currentEstimation;
     }
 
     void updateGraph()
     {
-        while (true)
+        for (overlapGraphSensorInfo *currentSensor : sensorIndex)
         {
-            for (overlapGraphSensorInfo *currentSensor : sensorIndex)
+            // std::cout << "Updating " << std::to_string(currentSensor->index) << " in graph. " << std::endl;
+            std::lock_guard<std::mutex> guard(graphMutex);
+            uint16_t agreementSum = 0;
+            for (uint8_t adjacentSensorIndex : currentSensor->compatibleSensors)
             {
-                std::lock_guard<std::mutex> guard(graphMutex);
-                uint16_t agreementSum = 0;
-                for (uint8_t adjacentSensorIndex : currentSensor->compatibleSensors)
-                {
-                    overlapGraphSensorInfo *adjacentSensor = sensorIndex[adjacentSensorIndex];
-                    uint8_t prevAgreement = getAgreement(currentSensor->index, adjacentSensorIndex);
-                    uint8_t currAgreement = currentSensor->sensor->overlap(adjacentSensor->sensor);
-                    putAgreement(currentSensor->index, adjacentSensorIndex, currAgreement);
-                    adjacentSensor->confidence += ((currAgreement - prevAgreement) / adjacentSensor->numCompatible);
-                    agreementSum += currAgreement;
-                }
-                currentSensor->confidence = (uint8_t)(agreementSum / currentSensor->numCompatible);
+                overlapGraphSensorInfo *adjacentSensor = sensorIndex[adjacentSensorIndex];
+                uint8_t prevAgreement = getAgreement(currentSensor->index, adjacentSensorIndex);
+                uint8_t currAgreement = currentSensor->sensor->overlap(adjacentSensor->sensor);
+                putAgreement(currentSensor->index, adjacentSensorIndex, currAgreement);
+                adjacentSensor->confidence += ((currAgreement - prevAgreement) / adjacentSensor->numCompatible);
+                agreementSum += currAgreement;
+                // std::cout << "Agreement with sensor " << std::to_string(adjacentSensor->index) << " in graph is " << std::to_string(currAgreement) << std::endl;
             }
+            currentSensor->confidence = (uint8_t)(agreementSum / currentSensor->numCompatible);
         }
     }
 
@@ -324,7 +345,7 @@ private:
     {
         if (adjacentSensor > currentSensor)
         {
-            return overlapGraph[{adjacentSensor, currentSensor}];
+            return overlapGraph[{currentSensor, adjacentSensor}];
         }
         else
         {
@@ -335,7 +356,7 @@ private:
     {
         if (adjacentSensor > currentSensor)
         {
-            overlapGraph[{adjacentSensor, currentSensor}] = agreement;
+            overlapGraph[{currentSensor, adjacentSensor}] = agreement;
         }
         else
         {
@@ -368,8 +389,8 @@ std::vector<float> traditionalStateEstimator(std::vector<Sensor *> vehicle, uint
         total[state] = total[state] / (float)numSensors;
     }
 
-    std::cout << "Traditional Estimation: x-" << std::to_string(total[0]) << " y-" << std::to_string(total[1]) << std::endl;
-    std::cout << std::endl;
+    // std::cout << "Traditional Estimation: x-" << std::to_string(total[0]) << " y-" << std::to_string(total[1]) << std::endl;
+    // std::cout << std::endl;
     return total;
 }
 
@@ -435,6 +456,7 @@ public:
         std::vector<float> traditionalEstimations = {};
         std::vector<float> overlapDurations = {};
         std::vector<float> traditionalDurations = {};
+        std::vector<float> updateGraphDurations = {};
 
         sleep(1);
         std::cout << "Beginning Simulation." << std::endl;
@@ -457,20 +479,30 @@ public:
             }
             for (int j = 0; j < 50; j++)
             {
-                std::cout << "---------------- New Round -------------" << std::endl;
+                std::cout << "---------------- New Time Step ------------- Phase:" << std::to_string(phase) <<  " TS: " << std::to_string(j) <<  std::endl;
                 for (int i = 0; i < depthMapSensorVehicle.size(); i++)
                 {
 
                     depthMapSensorVehicle[i]->operateSensor();
+
+
+                    auto start = std::chrono::high_resolution_clock::now();
+                    graphEstimator->updateGraph();
+                    auto stop = std::chrono::high_resolution_clock::now();
+                    updateGraphDurations.push_back((std::chrono::duration_cast<std::chrono::nanoseconds>(stop - start)).count());
+
                     std::cout << "Sensor " << std::to_string(i) << " Noise: " << depthMapSensorVehicle[i]->noise;
                     std::cout << " Sensor State: X:" << depthMapSensorVehicle[i]->getState()[0] << " Y:" << depthMapSensorVehicle[i]->getState()[1];
                     std::cout << std::endl;
-                    for(int row = 0; row < 5; row++){
-                        for (int col = 0; col < 5; col++){
+                    /*
+                    for (int row = 0; row < 5; row++)
+                    {
+                        for (int col = 0; col < 5; col++)
+                        {
                             std::cout << depthMapSensorVehicle[i]->value[row][col] << " ";
                         }
                         std::cout << std::endl;
-                    }
+                    }*/
                 }
 
                 std::vector<float> current_state = {};
@@ -485,6 +517,8 @@ public:
                     }
                 }
 
+                graphEstimator->discriminate();
+                
                 // Request States every 1 second
                 auto start = std::chrono::high_resolution_clock::now();
                 traditionalEstimations.push_back(traditionalStateEstimator(sensorVehicle, 1)[0]);
@@ -524,11 +558,13 @@ public:
         sim_data.push_back(overlapDifferences);
         sim_data.push_back(traditionalDurations);
         sim_data.push_back(overlapDurations);
+        sim_data.push_back(updateGraphDurations);
 
         column_names.push_back("traditionalEstDiff");
         column_names.push_back("overlapEstDiff");
         column_names.push_back("tradDuration");
         column_names.push_back("overlapDuration");
+        column_names.push_back("updateDuration");
 
         std::ofstream file("/Users/elyasmasrour/Documents/localRepos/overlap-graphs/data/simData.csv");
 
@@ -580,9 +616,11 @@ public:
 
         float tradTime = std::accumulate(traditionalDurations.begin(), traditionalDurations.end(), 0.0f) / traditionalDurations.size();
         float overlapTime = std::accumulate(overlapDurations.begin(), overlapDurations.end(), 0.0f) / overlapDurations.size();
+        float updateTime = std::accumulate(updateGraphDurations.begin(), updateGraphDurations.end(), 0.0f) / updateGraphDurations.size();
 
         std::cout << "Average Traditional Time: " << tradTime << std::endl;
-        std::cout << "Average Overlap Time: " << overlapTime << std::endl;
+        std::cout << "Average Overlap Estimation Time: " << overlapTime << std::endl;
+        std::cout << "Average Update Graph Time: " << updateTime << std::endl;
 
         simulationComplete = true;
     }
@@ -605,27 +643,48 @@ int runTest2()
     simulatedDepthMapSensor *secondSensor = new simulatedDepthMapSensor(std::pair<int, int>(1, -1));
     simulatedDepthMapSensor *thirdSensor = new simulatedDepthMapSensor(std::pair<int, int>(1, 1));
     simulatedDepthMapSensor *fourthSensor = new simulatedDepthMapSensor(std::pair<int, int>(-1, 1));
+    simulatedDepthMapSensor *fifthSensor = new simulatedDepthMapSensor(std::pair<int, int>(1, 1));
+    simulatedDepthMapSensor *sixthSensor = new simulatedDepthMapSensor(std::pair<int, int>(-1, 1));
 
-    std::vector<Sensor *> vehicle = {firstSensor, secondSensor, thirdSensor, fourthSensor};
+    std::vector<Sensor *> vehicle = {firstSensor, secondSensor, thirdSensor, fourthSensor, fifthSensor, sixthSensor};
 
-    std::vector<std::vector<float>> sequence = {{10.0, 0.1, 0.1, 0.1}, {0.1, 10.0, 0.1, 0.1}, {0.1, 0.1, 10.0, 0.1}};
+    std::vector<std::vector<float>> sequence = {{10.0, 10.0, 0.1, 0.1, 0.1, 0.1}, {0.1, 0.1, 10.0, 10.0, 0.1, 0.1}, {0.1, 0.1, 0.1, 0.1, 10.0, 10.0}
+    };
 
-    std::vector<overlapGraphSensorInfo *> sensorMap = {new overlapGraphSensorInfo(firstSensor, 0, {1, 2, 3}),
-                                                       new overlapGraphSensorInfo(secondSensor, 1, {0, 2, 3}),
-                                                       new overlapGraphSensorInfo(thirdSensor, 2, {0, 1, 3}),
-                                                       new overlapGraphSensorInfo(fourthSensor, 3, {0, 1, 2})};
+    std::vector<overlapGraphSensorInfo *> sensorMap = {
+        new overlapGraphSensorInfo(firstSensor, 0, {1, 2, 3, 4, 5}),
+        new overlapGraphSensorInfo(secondSensor, 1, {0, 2, 3, 4, 5}),
+        new overlapGraphSensorInfo(thirdSensor, 2, {0, 1, 3, 4, 5}),
+        new overlapGraphSensorInfo(fourthSensor, 3, {0, 1, 2, 4, 5}),
+        new overlapGraphSensorInfo(fifthSensor, 4, {0, 1, 2, 3, 5}),
+        new overlapGraphSensorInfo(sixthSensor, 5, {0, 1, 2, 3, 4}),
+    };
 
-    std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph = {{{0, 1}, 0}, {{1, 2}, 0}, {{0, 2}, 0}, {{0, 3}, 0}, {{1, 3}, 0}, {{2, 3}, 0}};
+    std::map<std::pair<uint8_t, uint8_t>, uint8_t> overlapGraph = {
+        {{0, 1}, 0},
+        {{0, 2}, 0},
+        {{0, 3}, 0},
+        {{0, 4}, 0},
+        {{0, 5}, 0},
+        {{1, 2}, 0},
+        {{1, 3}, 0},
+        {{1, 4}, 0},
+        {{1, 5}, 0},
+        {{2, 3}, 0},
+        {{2, 4}, 0},
+        {{2, 5}, 0},
+        {{3, 4}, 0},
+        {{3, 5}, 0},
+        {{4, 5}, 0},
+    };
+
     overlapGraphEstimator est(sensorMap, overlapGraph, 2);
 
     SimulationEnvironment2 sim = SimulationEnvironment2(vehicle, sequence, 5, &est);
 
     // Run Simulation, Traditional State Estimation, Overlap Graph Estimation
     std::thread runSimulation(&SimulationEnvironment2::runSimulation, sim);
-    std::thread runOverlapGraph(&overlapGraphEstimator::updateGraph, &est);
-
     runSimulation.join();
-    runOverlapGraph.join();
 
     return 0;
 }
